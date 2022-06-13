@@ -15,6 +15,15 @@ var unit = Unit(struct{}{})
 
 type Maybe[T any] *T
 
+func mapMaybe[A, B any](maybeA Maybe[A], f func(A) B) Maybe[B] {
+	if maybeA == nil {
+		return nil
+	} else {
+		b := f(*maybeA)
+		return Maybe[B](&b)
+	}
+}
+
 type Result[T any] struct {
 	Value *T
 	Error *error
@@ -263,7 +272,7 @@ func coalesceErrors(errs ...error) error {
 	return nil
 }
 
-func mapStream[A, B any](f func(a A) B) Stream[A, B, Unit] {
+func funcToStream[A, B any](f func(a A) B) Stream[A, B, Unit] {
 	return Stream[A, B, Unit](func(env Env[A, B]) Result[Unit] {
 		for maybeA := env.recv(); maybeA != nil; maybeA = env.recv() {
 			if !env.send(f(*maybeA)) {
@@ -271,5 +280,25 @@ func mapStream[A, B any](f func(a A) B) Stream[A, B, Unit] {
 			}
 		}
 		return Value(unit)
+	})
+}
+
+func mapIn[A, B, C, R any](stream Stream[B, C, R], f func(a A) B) Stream[A, C, R] {
+	return Stream[A, C, R](func(env Env[A, C]) Result[R] {
+		return stream(Env[B, C]{
+			ctx:  env.ctx,
+			recv: func() Maybe[B] { return mapMaybe(env.recv(), f) },
+			send: env.send,
+		})
+	})
+}
+
+func mapOut[A, B, C, R any](stream Stream[A, B, R], f func(b B) C) Stream[A, C, R] {
+	return Stream[A, C, R](func(env Env[A, C]) Result[R] {
+		return stream(Env[A, B]{
+			ctx:  env.ctx,
+			recv: env.recv,
+			send: func(b B) bool { return env.send(f(b)) },
+		})
 	})
 }
