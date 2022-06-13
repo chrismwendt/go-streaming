@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestStreaming(t *testing.T) {
@@ -66,6 +67,34 @@ func TestError(t *testing.T) {
 
 	if *r.Error != fooError {
 		t.Fatalf("expected foo error")
+	}
+}
+
+func TestExit(t *testing.T) {
+	done := make(chan Unit)
+
+	s1 := Stream[Void, int, Unit](func(env Env[Void, int]) Result[Unit] {
+		defer func() {
+			done <- unit
+		}()
+		if !env.send(0) {
+			return Value(unit)
+		}
+		return Value(unit)
+	})
+	s2 := connect(s1, Stream[int, Void, Unit](func(env Env[int, Void]) Result[Unit] {
+		if env.recv() == nil {
+			t.Fatalf("expected to receive a value")
+		}
+		return Value(unit)
+	}))
+
+	run(context.Background(), s2)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out")
 	}
 }
 
