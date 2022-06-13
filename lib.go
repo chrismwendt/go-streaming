@@ -92,14 +92,14 @@ func run[R any](ctx context.Context, stream Stream[Void, Void, R]) Result[R] {
 	})
 }
 
-func sourceSlice[T any](ts []T) Stream[Void, T, Void] {
-	return Stream[Void, T, Void](func(env Env[Void, T]) Result[Void] {
+func sourceSlice[T any](ts []T) Stream[Void, T, Unit] {
+	return Stream[Void, T, Unit](func(env Env[Void, T]) Result[Unit] {
 		for _, t := range ts {
 			if !env.send(t) {
 				break
 			}
 		}
-		return Value[Void](nil)
+		return Value(unit)
 	})
 }
 
@@ -142,8 +142,8 @@ func sinkNull[T, R any](r R) Stream[T, Void, R] {
 	})
 }
 
-func take[T any](n int) Stream[T, T, Void] {
-	return Stream[T, T, Void](func(env Env[T, T]) Result[Void] {
+func take[T any](n int) Stream[T, T, Unit] {
+	return Stream[T, T, Unit](func(env Env[T, T]) Result[Unit] {
 		for i := 0; i < n; i++ {
 			v := env.recv()
 			if v == nil {
@@ -153,22 +153,22 @@ func take[T any](n int) Stream[T, T, Void] {
 				break
 			}
 		}
-		return Value[Void](nil)
+		return Value(unit)
 	})
 }
 
-func sourceExec(createCmd func(context.Context) *exec.Cmd) Stream[Void, []byte, Void] {
-	return Stream[Void, []byte, Void](func(env Env[Void, []byte]) (r Result[Void]) {
+func sourceExec(createCmd func(context.Context) *exec.Cmd) Stream[Void, []byte, Unit] {
+	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) (r Result[Unit]) {
 		cmd := createCmd(env.ctx)
 
 		output, err := cmd.StdoutPipe()
 		if err != nil {
-			return Error[Void](err)
+			return Error[Unit](err)
 		}
 
 		err = cmd.Start()
 		if err != nil {
-			return Error[Void](err)
+			return Error[Unit](err)
 		}
 
 		defer func() {
@@ -176,28 +176,38 @@ func sourceExec(createCmd func(context.Context) *exec.Cmd) Stream[Void, []byte, 
 			err2 := cmd.Wait()
 			err = coalesceErrors(err1, err2)
 			if r.Error == nil && err != nil {
-				r = Error[Void](err)
+				r = Error[Unit](err)
 			}
 		}()
 
-		buf := make([]byte, 4096)
-		for {
-			n, err := output.Read(buf)
-			if err != nil && err != io.EOF {
-				return Error[Void](err)
-			}
+		return read(output, env.send)
+	})
+}
 
-			if n > 0 {
-				if !env.send(buf[:n]) {
-					return Value[Void](nil)
-				}
-			}
+func sourceReader(reader io.Reader) Stream[Void, []byte, Unit] {
+	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) (r Result[Unit]) {
+		return read(reader, env.send)
+	})
+}
 
-			if err == io.EOF {
-				return Value[Void](nil)
+func read(reader io.Reader, cb func([]byte) bool) Result[Unit] {
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if err != nil && err != io.EOF {
+			return Error[Unit](err)
+		}
+
+		if n > 0 {
+			if !cb(buf[:n]) {
+				return Value(unit)
 			}
 		}
-	})
+
+		if err == io.EOF {
+			return Value(unit)
+		}
+	}
 }
 
 func coalesceErrors(errs ...error) error {
@@ -209,13 +219,13 @@ func coalesceErrors(errs ...error) error {
 	return nil
 }
 
-func mapStream[A, B any](f func(a A) B) Stream[A, B, Void] {
-	return Stream[A, B, Void](func(env Env[A, B]) Result[Void] {
+func mapStream[A, B any](f func(a A) B) Stream[A, B, Unit] {
+	return Stream[A, B, Unit](func(env Env[A, B]) Result[Unit] {
 		for maybeA := env.recv(); maybeA != nil; maybeA = env.recv() {
 			if !env.send(f(*maybeA)) {
 				break
 			}
 		}
-		return Value[Void](nil)
+		return Value(unit)
 	})
 }
