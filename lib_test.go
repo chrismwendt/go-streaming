@@ -100,7 +100,7 @@ func TestExit(t *testing.T) {
 }
 
 func TestExec(t *testing.T) {
-	s1 := sourceExec(func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "-n", "a b c") })
+	s1 := sourceExec(func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "-n", "a b c") }, wait)
 	s2 := connect(s1, mapStream(func(bs []byte) string { return string(bs) }))
 	s3 := connect(s2, sinkString())
 

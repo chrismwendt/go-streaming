@@ -157,11 +157,11 @@ func take[T any](n int) Stream[T, T, Unit] {
 	})
 }
 
-func sourceExec(createCmd func(context.Context) *exec.Cmd) Stream[Void, []byte, Unit] {
+func sourceExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) error) Stream[Void, []byte, Unit] {
 	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) (r Result[Unit]) {
 		cmd := createCmd(env.ctx)
 
-		output, err := cmd.StdoutPipe()
+		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return Error[Unit](err)
 		}
@@ -172,21 +172,54 @@ func sourceExec(createCmd func(context.Context) *exec.Cmd) Stream[Void, []byte, 
 		}
 
 		defer func() {
-			err1 := cmd.Process.Kill()
-			err2 := cmd.Wait()
-			err = coalesceErrors(err1, err2)
+			err := stop(cmd)
 			if r.Error == nil && err != nil {
 				r = Error[Unit](err)
 			}
 		}()
 
-		return read(output, env.send)
+		return read(stdout, env.send)
 	})
+}
+
+func sinkExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) error) Stream[[]byte, Void, Unit] {
+	return Stream[[]byte, Void, Unit](func(env Env[[]byte, Void]) (r Result[Unit]) {
+		cmd := createCmd(env.ctx)
+
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return Error[Unit](err)
+		}
+
+		err = cmd.Start()
+		if err != nil {
+			return Error[Unit](err)
+		}
+
+		defer func() {
+			err := stop(cmd)
+			if r.Error == nil && err != nil {
+				r = Error[Unit](err)
+			}
+		}()
+
+		return write(stdin, env.recv)
+	})
+}
+
+func wait(cmd *exec.Cmd) error {
+	return cmd.Wait()
 }
 
 func sourceReader(reader io.Reader) Stream[Void, []byte, Unit] {
 	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) (r Result[Unit]) {
 		return read(reader, env.send)
+	})
+}
+
+func sourceWriter(writer io.Writer) Stream[[]byte, Void, Unit] {
+	return Stream[[]byte, Void, Unit](func(env Env[[]byte, Void]) (r Result[Unit]) {
+		return write(writer, env.recv)
 	})
 }
 
@@ -208,6 +241,17 @@ func read(reader io.Reader, cb func([]byte) bool) Result[Unit] {
 			return Value(unit)
 		}
 	}
+}
+
+func write(writer io.Writer, more func() Maybe[[]byte]) Result[Unit] {
+	for maybeBs := more(); maybeBs != nil; maybeBs = more() {
+		_, err := writer.Write(*maybeBs)
+		if err != nil {
+			return Error[Unit](err)
+		}
+	}
+
+	return Value(unit)
 }
 
 func coalesceErrors(errs ...error) error {
