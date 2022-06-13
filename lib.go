@@ -1,6 +1,11 @@
 package streaming
 
-import "context"
+import (
+	"context"
+	"io"
+	"os/exec"
+	"strings"
+)
 
 type Void *struct{}
 
@@ -108,6 +113,27 @@ func sinkSlice[T any]() Stream[T, Void, []T] {
 	})
 }
 
+func mapValue[A, B any](f func(a A) B, result Result[A]) Result[B] {
+	if result.Error != nil {
+		return Error[B](*result.Error)
+	}
+	return Value(f(*result.Value))
+}
+
+func mapReturn[A, B, R1, R2 any](stream Stream[A, B, R1], f func(r1 R1) R2) Stream[A, B, R2] {
+	return Stream[A, B, R2](func(env Env[A, B]) Result[R2] {
+
+		return mapValue(f, stream(env))
+	})
+}
+
+func sinkString() Stream[string, Void, string] {
+	return mapReturn(
+		sinkSlice[string](),
+		func(s []string) string { return strings.Join(s, "") },
+	)
+}
+
 func sinkNull[T, R any](r R) Stream[T, Void, R] {
 	return Stream[T, Void, R](func(env Env[T, Void]) Result[R] {
 		for env.recv() != nil {
@@ -124,6 +150,69 @@ func take[T any](n int) Stream[T, T, Void] {
 				break
 			}
 			if !env.send(*v) {
+				break
+			}
+		}
+		return Value[Void](nil)
+	})
+}
+
+func sourceExec(createCmd func(context.Context) *exec.Cmd) Stream[Void, []byte, Void] {
+	return Stream[Void, []byte, Void](func(env Env[Void, []byte]) (r Result[Void]) {
+		cmd := createCmd(env.ctx)
+
+		output, err := cmd.StdoutPipe()
+		if err != nil {
+			return Error[Void](err)
+		}
+
+		err = cmd.Start()
+		if err != nil {
+			return Error[Void](err)
+		}
+
+		defer func() {
+			err1 := cmd.Process.Kill()
+			err2 := cmd.Wait()
+			err = coalesceErrors(err1, err2)
+			if r.Error == nil && err != nil {
+				r = Error[Void](err)
+			}
+		}()
+
+		buf := make([]byte, 4096)
+		for {
+			n, err := output.Read(buf)
+			if err != nil && err != io.EOF {
+				return Error[Void](err)
+			}
+
+			if n > 0 {
+				if !env.send(buf[:n]) {
+					return Value[Void](nil)
+				}
+			}
+
+			if err == io.EOF {
+				return Value[Void](nil)
+			}
+		}
+	})
+}
+
+func coalesceErrors(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mapStream[A, B any](f func(a A) B) Stream[A, B, Void] {
+	return Stream[A, B, Void](func(env Env[A, B]) Result[Void] {
+		for maybeA := env.recv(); maybeA != nil; maybeA = env.recv() {
+			if !env.send(f(*maybeA)) {
 				break
 			}
 		}

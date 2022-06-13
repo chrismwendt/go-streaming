@@ -3,6 +3,7 @@ package streaming
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -95,6 +96,22 @@ func TestExit(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatalf("timed out")
+	}
+}
+
+func TestExec(t *testing.T) {
+	s1 := sourceExec(func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "-n", "a b c") })
+	s2 := connect(s1, mapStream(func(bs []byte) string { return string(bs) }))
+	s3 := connect(s2, sinkString())
+
+	r := run(context.Background(), s3)
+
+	if r.Error != nil {
+		t.Fatalf("error %s", *r.Error)
+	}
+
+	if *r.Value != "a b c" {
+		t.Fatalf("expected \"a b c\", got %q", *r.Value)
 	}
 }
 
