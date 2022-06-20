@@ -37,6 +37,14 @@ func Error[T any](err error) Result[T] {
 	return Result[T]{Error: &err}
 }
 
+func ErrorDefault[T any](err error, defalt T) Result[T] {
+	if err == nil {
+		return Result[T]{Value: &defalt}
+	} else {
+		return Result[T]{Error: &err}
+	}
+}
+
 type Env[In, Out any] struct {
 	ctx  context.Context
 	recv func() Maybe[In]
@@ -167,7 +175,7 @@ func take[T any](n int) Stream[T, T, Unit] {
 }
 
 func sourceExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) error) Stream[Void, []byte, Unit] {
-	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) (r Result[Unit]) {
+	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) Result[Unit] {
 		cmd := createCmd(env.ctx)
 
 		stdout, err := cmd.StdoutPipe()
@@ -180,15 +188,25 @@ func sourceExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) 
 			return Error[Unit](err)
 		}
 
-		defer func() {
-			err := stop(cmd)
-			if r.Error == nil && err != nil {
-				r = Error[Unit](err)
-			}
-		}()
+		res := read(stdout, env.send)
 
-		return read(stdout, env.send)
+		stopErr := stop(cmd)
+
+		return coalesce(res, ErrorDefault(stopErr, unit))
 	})
+}
+
+func coalesce[T any](rs ...Result[T]) Result[T] {
+	for _, r := range rs {
+		if r.Error != nil {
+			return r
+		}
+	}
+	for _, r := range rs {
+		return r
+	}
+	var r Result[T]
+	return r
 }
 
 func sinkExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) error) Stream[[]byte, Void, Unit] {
