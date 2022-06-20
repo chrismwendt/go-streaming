@@ -244,7 +244,7 @@ func sourceReader(reader io.Reader) Stream[Void, []byte, Unit] {
 	})
 }
 
-func sourceWriter(writer io.Writer) Stream[[]byte, Void, Unit] {
+func sinkWriter(writer io.Writer) Stream[[]byte, Void, Unit] {
 	return Stream[[]byte, Void, Unit](func(env Env[[]byte, Void]) (r Result[Unit]) {
 		return write(writer, env.recv)
 	})
