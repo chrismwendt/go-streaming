@@ -16,35 +16,35 @@ func TestStreaming(t *testing.T) {
 
 	tests := map[string]Test{
 		"empty": {want: []int{}, stream: func() Stream[Void, Void, []int] {
-			s1 := sourceSlice([]int{})
-			s2 := connect(s1, sinkSlice[int]())
+			s1 := SourceSlice([]int{})
+			s2 := Connect(s1, SinkSlice[int]())
 			return s2
 		}},
 		"simple": {want: []int{1, 2, 3}, stream: func() Stream[Void, Void, []int] {
-			s1 := sourceSlice([]int{1, 2, 3})
-			s2 := connect(s1, sinkSlice[int]())
+			s1 := SourceSlice([]int{1, 2, 3})
+			s2 := Connect(s1, SinkSlice[int]())
 			return s2
 		}},
 		"take less": {want: []int{1}, stream: func() Stream[Void, Void, []int] {
-			s1 := sourceSlice([]int{1, 2})
-			s2 := connect(s1, take[int](1))
-			s3 := connect(s2, sinkSlice[int]())
+			s1 := SourceSlice([]int{1, 2})
+			s2 := Connect(s1, Take[int](1))
+			s3 := Connect(s2, SinkSlice[int]())
 			return s3
 		}},
 		"take more": {want: []int{1, 2}, stream: func() Stream[Void, Void, []int] {
-			s1 := sourceSlice([]int{1, 2})
-			s2 := connect(s1, take[int](3))
-			s3 := connect(s2, sinkSlice[int]())
+			s1 := SourceSlice([]int{1, 2})
+			s2 := Connect(s1, Take[int](3))
+			s3 := Connect(s2, SinkSlice[int]())
 			return s3
 		}},
 		"leftovers": {want: []int{}, stream: func() Stream[Void, Void, []int] {
-			s1 := sourceSlice([]int{1, 2})
-			s2 := connect(s1, sinkNull[int]([]int{}))
+			s1 := SourceSlice([]int{1, 2})
+			s2 := Connect(s1, SinkNull[int]([]int{}))
 			return s2
 		}},
 	}
 	for _, test := range tests {
-		r := run(context.Background(), test.stream())
+		r := Run(context.Background(), test.stream())
 		if r.Error != nil {
 			t.Fatalf("error %s", *r.Error)
 		}
@@ -58,9 +58,9 @@ func TestError(t *testing.T) {
 	s1 := Stream[Void, Void, Void](func(p Env[Void, Void]) Result[Void] {
 		return Error[Void](fooError)
 	})
-	s2 := connect(s1, sinkNull[Void, Void](nil))
+	s2 := Connect(s1, SinkNull[Void, Void](nil))
 
-	r := run(context.Background(), s2)
+	r := Run(context.Background(), s2)
 
 	if r.Error == nil {
 		t.Fatalf("expected an error")
@@ -76,21 +76,21 @@ func TestExit(t *testing.T) {
 
 	s1 := Stream[Void, int, Unit](func(env Env[Void, int]) Result[Unit] {
 		defer func() {
-			done <- unit
+			done <- unitValue
 		}()
-		if !env.send(0) {
-			return Value(unit)
+		if !env.Send(0) {
+			return Value(unitValue)
 		}
-		return Value(unit)
+		return Value(unitValue)
 	})
-	s2 := connect(s1, Stream[int, Void, Unit](func(env Env[int, Void]) Result[Unit] {
-		if env.recv() == nil {
+	s2 := Connect(s1, Stream[int, Void, Unit](func(env Env[int, Void]) Result[Unit] {
+		if env.Recv() == nil {
 			t.Fatalf("expected to receive a value")
 		}
-		return Value(unit)
+		return Value(unitValue)
 	}))
 
-	run(context.Background(), s2)
+	Run(context.Background(), s2)
 
 	select {
 	case <-done:
@@ -100,11 +100,11 @@ func TestExit(t *testing.T) {
 }
 
 func TestExec(t *testing.T) {
-	s1 := sourceExec(func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "-n", "a b c") }, wait)
-	s2 := connect(s1, funcToStream(func(bs []byte) string { return string(bs) }))
-	s3 := connect(s2, sinkString())
+	s1 := SourceExec(func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "-n", "a b c") }, func(cmd *exec.Cmd) error { return cmd.Wait() })
+	s2 := Connect(s1, FuncToStream(func(bs []byte) string { return string(bs) }))
+	s3 := Connect(s2, SinkString())
 
-	r := run(context.Background(), s3)
+	r := Run(context.Background(), s3)
 
 	if r.Error != nil {
 		t.Fatalf("error %s", *r.Error)
