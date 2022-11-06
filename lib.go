@@ -7,15 +7,20 @@ import (
 	"strings"
 )
 
+// No value.
 type Void *struct{}
 
+// The type of a dummy value, ().
 type Unit struct{}
 
+// Dummy value, ().
 var unitValue = Unit(struct{}{})
 
+// Either nil or a reference to T.
 type Maybe[T any] *T
 
-func mapMaybe[A, B any](maybeA Maybe[A], f func(A) B) Maybe[B] {
+// Applies a function to the value in a Maybe.
+func MapMaybe[A, B any](maybeA Maybe[A], f func(A) B) Maybe[B] {
 	if maybeA == nil {
 		return nil
 	} else {
@@ -24,19 +29,23 @@ func mapMaybe[A, B any](maybeA Maybe[A], f func(A) B) Maybe[B] {
 	}
 }
 
+// Either T or error.
 type Result[T any] struct {
 	Value *T
 	Error *error
 }
 
+// Result with a T.
 func Value[T any](value T) Result[T] {
 	return Result[T]{Value: &value}
 }
 
+// Result with an error.
 func Error[T any](err error) Result[T] {
 	return Result[T]{Error: &err}
 }
 
+// Coalesces an error with a default.
 func ErrorDefault[T any](err error, defalt T) Result[T] {
 	if err == nil {
 		return Result[T]{Value: &defalt}
@@ -45,14 +54,23 @@ func ErrorDefault[T any](err error, defalt T) Result[T] {
 	}
 }
 
+// Context that a stream needs in order to run, e.g. how to receive/send
+// values upstream/downstream.
 type Env[In, Out any] struct {
-	Ctx  context.Context
+	// For cancellation.
+	Ctx context.Context
+
+	// Receive a value from upstream.
 	Recv func() Maybe[In]
+
+	// Send a value downstream.
 	Send func(Out) bool
 }
 
+// A stream of In values coming in and Out values going out.
 type Stream[In, Out, Return any] func(Env[In, Out]) Result[Return]
 
+// Connects 2 streams together.
 func Connect[A, B, C, R1, R2 any](a2b Stream[A, B, R1], b2c Stream[B, C, R2]) Stream[A, C, R2] {
 	return Stream[A, C, R2](func(env Env[A, C]) Result[R2] {
 		maybeBs := make(chan Maybe[B])
@@ -101,6 +119,7 @@ func Connect[A, B, C, R1, R2 any](a2b Stream[A, B, R1], b2c Stream[B, C, R2]) St
 	})
 }
 
+// Runs a stream.
 func Run[R any](ctx context.Context, stream Stream[Void, Void, R]) Result[R] {
 	return stream(Env[Void, Void]{
 		Ctx:  ctx,
@@ -109,6 +128,7 @@ func Run[R any](ctx context.Context, stream Stream[Void, Void, R]) Result[R] {
 	})
 }
 
+// Makes a stream from a []T.
 func SourceSlice[T any](ts []T) Stream[Void, T, Unit] {
 	return Stream[Void, T, Unit](func(env Env[Void, T]) Result[Unit] {
 		for _, t := range ts {
@@ -120,6 +140,7 @@ func SourceSlice[T any](ts []T) Stream[Void, T, Unit] {
 	})
 }
 
+// Makes a stream from a []T.
 func SinkSlice[T any]() Stream[T, Void, []T] {
 	return Stream[T, Void, []T](func(env Env[T, Void]) Result[[]T] {
 		ts := []T{}
@@ -130,6 +151,7 @@ func SinkSlice[T any]() Stream[T, Void, []T] {
 	})
 }
 
+// Maps the value in a Result[T].
 func MapValue[A, B any](f func(a A) B, result Result[A]) Result[B] {
 	if result.Error != nil {
 		return Error[B](*result.Error)
@@ -137,6 +159,7 @@ func MapValue[A, B any](f func(a A) B, result Result[A]) Result[B] {
 	return Value(f(*result.Value))
 }
 
+// Maps the return value of a stream.
 func MapReturn[A, B, R1, R2 any](stream Stream[A, B, R1], f func(r1 R1) R2) Stream[A, B, R2] {
 	return Stream[A, B, R2](func(env Env[A, B]) Result[R2] {
 
@@ -144,6 +167,7 @@ func MapReturn[A, B, R1, R2 any](stream Stream[A, B, R1], f func(r1 R1) R2) Stre
 	})
 }
 
+// Makes a stream that returns all input concatenated.
 func SinkString() Stream[string, Void, string] {
 	return MapReturn(
 		SinkSlice[string](),
@@ -151,6 +175,7 @@ func SinkString() Stream[string, Void, string] {
 	)
 }
 
+// Makes a stream that returns the given value.
 func SinkNull[T, R any](r R) Stream[T, Void, R] {
 	return Stream[T, Void, R](func(env Env[T, Void]) Result[R] {
 		for env.Recv() != nil {
@@ -159,6 +184,7 @@ func SinkNull[T, R any](r R) Stream[T, Void, R] {
 	})
 }
 
+// Takes n values from a stream.
 func Take[T any](n int) Stream[T, T, Unit] {
 	return Stream[T, T, Unit](func(env Env[T, T]) Result[Unit] {
 		for i := 0; i < n; i++ {
@@ -174,6 +200,7 @@ func Take[T any](n int) Stream[T, T, Unit] {
 	})
 }
 
+// Streams stdout from a command.
 func SourceExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) error) Stream[Void, []byte, Unit] {
 	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) Result[Unit] {
 		cmd := createCmd(env.Ctx)
@@ -209,6 +236,7 @@ func coalesceResults[T any](rs ...Result[T]) Result[T] {
 	return r
 }
 
+// Streams stdin to a command.
 func SinkExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) error) Stream[[]byte, Void, Unit] {
 	return Stream[[]byte, Void, Unit](func(env Env[[]byte, Void]) (r Result[Unit]) {
 		cmd := createCmd(env.Ctx)
@@ -234,12 +262,14 @@ func SinkExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) er
 	})
 }
 
+// Streams bytes from an io.Reader.
 func SourceReader(reader io.Reader) Stream[Void, []byte, Unit] {
 	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) (r Result[Unit]) {
 		return read(reader, env.Send)
 	})
 }
 
+// Streams bytes into an io.Writer.
 func SinkWriter(writer io.Writer) Stream[[]byte, Void, Unit] {
 	return Stream[[]byte, Void, Unit](func(env Env[[]byte, Void]) (r Result[Unit]) {
 		return write(writer, env.Recv)
@@ -286,6 +316,7 @@ func coalesceErrors(errs ...error) error {
 	return nil
 }
 
+// Makes a stream from a function.
 func FuncToStream[A, B any](f func(a A) B) Stream[A, B, Unit] {
 	return Stream[A, B, Unit](func(env Env[A, B]) Result[Unit] {
 		for maybeA := env.Recv(); maybeA != nil; maybeA = env.Recv() {
@@ -297,16 +328,18 @@ func FuncToStream[A, B any](f func(a A) B) Stream[A, B, Unit] {
 	})
 }
 
+// Maps the values coming into a stream.
 func MapIn[A, B, C, R any](stream Stream[B, C, R], f func(a A) B) Stream[A, C, R] {
 	return Stream[A, C, R](func(env Env[A, C]) Result[R] {
 		return stream(Env[B, C]{
 			Ctx:  env.Ctx,
-			Recv: func() Maybe[B] { return mapMaybe(env.Recv(), f) },
+			Recv: func() Maybe[B] { return MapMaybe(env.Recv(), f) },
 			Send: env.Send,
 		})
 	})
 }
 
+// Maps the values going out of a stream.
 func MapOut[A, B, C, R any](stream Stream[A, B, R], f func(b B) C) Stream[A, C, R] {
 	return Stream[A, C, R](func(env Env[A, C]) Result[R] {
 		return stream(Env[A, B]{
