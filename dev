@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+trigger bash -c "go test -count=1 -v -json . | gotestfmt"
