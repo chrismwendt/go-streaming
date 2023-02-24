@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,7 +102,7 @@ func TestExit(t *testing.T) {
 
 func TestExec(t *testing.T) {
 	s1 := SourceExec(func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "-n", "a b c") }, func(cmd *exec.Cmd) error { return cmd.Wait() })
-	s2 := Connect(s1, FuncToStream(func(bs []byte) string { return string(bs) }))
+	s2 := Connect(s1, FuncToStreamPure(func(bs []byte) string { return string(bs) }))
 	s3 := Connect(s2, SinkString())
 
 	r := Run(context.Background(), s3)
@@ -112,6 +113,33 @@ func TestExec(t *testing.T) {
 
 	if *r.Value != "a b c" {
 		t.Fatalf("expected \"a b c\", got %q", *r.Value)
+	}
+}
+
+func TestSplit(t *testing.T) {
+	tests := map[string]string{
+		"empty":                "",
+		"1 chunk":              "a",
+		"2 chunks":             "a|b",
+		"delimiter alone":      "|",
+		"delimiter then chunk": "|a",
+		"chunk then delimiter": "a|",
+	}
+	for _, test := range tests {
+		s1 := SourceSlice([]byte(test))
+		s2 := Connect(s1, SplitBy(func(i byte) bool { return i == '|' }))
+		s3 := Connect(s2, FuncToStreamCtx(func(ctx context.Context, s Stream[Void, byte, Unit]) Result[string] {
+			return MapValue(func(bs []byte) string { return string(bs) }, Run(ctx, Connect(s, SinkSlice[byte]())))
+		}))
+		s4 := Connect(s3, SinkSlice[string]())
+
+		r := Run(context.Background(), s4)
+
+		if r.Error != nil {
+			t.Fatalf("error %s", *r.Error)
+		}
+
+		assertEqual(t, strings.Split(test, "|"), *r.Value)
 	}
 }
 

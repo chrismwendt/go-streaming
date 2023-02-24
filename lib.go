@@ -63,7 +63,7 @@ type Env[In, Out any] struct {
 	// Receive a value from upstream.
 	Recv func() Maybe[In]
 
-	// Send a value downstream.
+	// Send a value downstream. Returns true if downstream is requesting another value.
 	Send func(Out) bool
 }
 
@@ -200,6 +200,28 @@ func Take[T any](n int) Stream[T, T, Unit] {
 	})
 }
 
+// Drops n values from a stream.
+func Drop[T any](n int) Stream[T, T, Unit] {
+	return Stream[T, T, Unit](func(env Env[T, T]) Result[Unit] {
+		for i := 0; i < n; i++ {
+			v := env.Recv()
+			if v == nil {
+				return Value(unitValue)
+			}
+		}
+
+		for {
+			v := env.Recv()
+			if v == nil {
+				return Value(unitValue)
+			}
+			if !env.Send(*v) {
+				return Value(unitValue)
+			}
+		}
+	})
+}
+
 // Streams stdout from a command.
 func SourceExec(createCmd func(context.Context) *exec.Cmd, stop func(*exec.Cmd) error) Stream[Void, []byte, Unit] {
 	return Stream[Void, []byte, Unit](func(env Env[Void, []byte]) Result[Unit] {
@@ -316,11 +338,29 @@ func coalesceErrors(errs ...error) error {
 	return nil
 }
 
+// Makes a stream from a pure function.
+func FuncToStreamPure[A, B any](f func(a A) B) Stream[A, B, Unit] {
+	return FuncToStreamCtx(func(ctx context.Context, a A) Result[B] {
+		return Value(f(a))
+	})
+}
+
 // Makes a stream from a function.
-func FuncToStream[A, B any](f func(a A) B) Stream[A, B, Unit] {
+func FuncToStream[A, B any](f func(a A) Result[B]) Stream[A, B, Unit] {
+	return FuncToStreamCtx(func(ctx context.Context, a A) Result[B] {
+		return f(a)
+	})
+}
+
+// Makes a stream from a function and passes the context.
+func FuncToStreamCtx[A, B any](f func(ctx context.Context, a A) Result[B]) Stream[A, B, Unit] {
 	return Stream[A, B, Unit](func(env Env[A, B]) Result[Unit] {
 		for maybeA := env.Recv(); maybeA != nil; maybeA = env.Recv() {
-			if !env.Send(f(*maybeA)) {
+			b := f(env.Ctx, *maybeA)
+			if b.Error != nil {
+				return Error[Unit](*b.Error)
+			}
+			if !env.Send(*b.Value) {
 				break
 			}
 		}
@@ -347,5 +387,106 @@ func MapOut[A, B, C, R any](stream Stream[A, B, R], f func(b B) C) Stream[A, C, 
 			Recv: env.Recv,
 			Send: func(b B) bool { return env.Send(f(b)) },
 		})
+	})
+}
+
+// Splits by a predicate.
+func SplitBy[T any](predicate func(t T) bool) Stream[T, Stream[Void, T, Unit], Unit] {
+	return Stream[T, Stream[Void, T, Unit], Unit](func(env Env[T, Stream[Void, T, Unit]]) Result[Unit] {
+		bail := false
+		inner := Stream[Void, T, Unit](
+			func(env2 Env[Void, T]) Result[Unit] {
+				for {
+					v := env.Recv()
+					if v == nil {
+						bail = true
+						return Value(unitValue)
+					}
+					if predicate(*v) {
+						return Value(unitValue)
+					}
+					if !env2.Send(*v) {
+						return Value(unitValue)
+					}
+				}
+			})
+
+		for env.Send(inner) {
+			if bail {
+				break
+			}
+		}
+
+		return Value(unitValue)
+	})
+}
+
+// Splits on a value.
+func SplitOn[T comparable](delimiter T) Stream[T, Stream[Void, T, Unit], Unit] {
+	return SplitBy(func(t T) bool { return t == delimiter })
+}
+
+// Folds values in a stream.
+func Fold[V any, R any](acc R, fold func(acc R, v V) R) Stream[V, Void, R] {
+	return Stream[V, Void, R](func(env Env[V, Void]) Result[R] {
+		for v := env.Recv(); v != nil; v = env.Recv() {
+			acc = fold(acc, *v)
+		}
+		return Value(acc)
+	})
+}
+
+// Sums the values in a stream.
+func Sum() Stream[int, Void, int] {
+	return Fold(0, func(acc int, v int) int { return acc + v })
+}
+
+// Finds the minimum value. Returns nil if there were no values.
+func Min() Stream[int, Void, *int] {
+	return Fold(nil, func(acc *int, v int) *int {
+		if acc == nil {
+			return &v
+		}
+
+		if *acc < v {
+			return acc
+		} else {
+			return &v
+		}
+	})
+}
+
+// Finds the maximum value. Returns nil if there were no values.
+func Max() Stream[int, Void, *int] {
+	return Fold(nil, func(acc *int, v int) *int {
+		if acc == nil {
+			return &v
+		}
+
+		if *acc < v {
+			return &v
+		} else {
+			return acc
+		}
+	})
+}
+
+// Counts the values in a stream.
+func Count[T any]() Stream[T, Void, int] {
+	return Fold(0, func(acc int, _ T) int { return acc + 1 })
+}
+
+// Flattens a stream of slices by emitting each element individually.
+func Concat[T any]() Stream[[]T, T, Unit] {
+	return Stream[[]T, T, Unit](func(env Env[[]T, T]) Result[Unit] {
+		for ts := env.Recv(); ts != nil; ts = env.Recv() {
+			for _, t := range *ts {
+				if !env.Send(t) {
+					return Value(unitValue)
+				}
+			}
+		}
+
+		return Value(unitValue)
 	})
 }
